@@ -5,7 +5,9 @@
 #include <ESP8266WiFi.h>          
 #include <DNSServer.h>
 #include <ESP8266WebServer.h>
-#include <WiFiManager.h>      
+#include <WiFiManager.h> 
+#include <ArduinoHttpClient.h>
+#include <ArduinoJson.h>     
 
 /*
  * 
@@ -24,12 +26,19 @@
 #define RAIN 3
 #define THUNDER 4
 
+#define URL "/v3/weather/now.json?key=SVsCZ5456voABhDvr&location=Chengdu&language=zh-Hans&unit=c HTTP/1.1\r\nHost:api.seniverse.com\r\n\r\n"
+
+String web_address = "api.seniverse.com";
+WiFiClient wifi;
+HttpClient http(wifi, web_address);
+String data;
 
 //下面这行代码就是初始化针脚的，根据自己的接线设置clock和data即可，reset没有连接就用参数U8X8_PIN_NONE
 U8G2_SSD1306_128X64_NONAME_1_SW_I2C u8g2(U8G2_R0, /* clock=*/ 12, /* data=*/ 14, /* reset=*/ U8X8_PIN_NONE);   // All Boards without Reset of the Display
 
 int16_t width = 0,height = 0;
 char buf[256];
+char temperature[16];
 
 void drawWeatherSymbol(u8g2_uint_t x, u8g2_uint_t y, uint8_t symbol)
 {
@@ -63,7 +72,7 @@ void drawWeatherSymbol(u8g2_uint_t x, u8g2_uint_t y, uint8_t symbol)
   }
 }
 
-void drawWeather(uint8_t symbol, int degree)
+void drawWeather(uint8_t symbol, char* degree)
 {
   drawWeatherSymbol(0, 48, symbol);
   u8g2.setFont(u8g2_font_logisoso32_tf);
@@ -114,7 +123,7 @@ void drawScrollString(int16_t offset, const char *s)
   
 }
 
-void draw(const char *s, uint8_t symbol, int degree)
+void draw(const char *s, uint8_t symbol, char* degree)
 {
   int16_t offset = -(int16_t)u8g2.getDisplayWidth();
   int16_t len = strlen(s);
@@ -132,6 +141,60 @@ void draw(const char *s, uint8_t symbol, int degree)
   }
 }
 
+// 发送HTTP请求并且将服务器响应通过串口输出
+void httpClientRequest(){
+  int httpCode = 0;
+  String httpData;
+  //发送http请求
+  httpCode = http.get("/v3/weather/now.json?key=SVsCZ5456voABhDvr&location=Chengdu&language=en&unit=c");
+  //若是有返回就接收数据
+  if ( httpCode == 0)
+  {
+    Serial.println("startedRequest ok");
+    httpCode = http.responseStatusCode();
+    if (httpCode >= 0)
+    {
+      int bodyLen = http.contentLength();
+      //将接收到的字符存入string中，直到数据接收完毕
+      while ( (http.connected() || http.available()) && (!http.endOfBodyReached()))
+      {
+        if (http.available())
+        {
+          char c = http.read();
+          httpData += c;
+        }
+        else
+          delay(1000);
+      }
+      //提取出关于天气的那一段字符串
+      data = httpData.substring((httpData.indexOf("\"now\":") + 6), httpData.indexOf(",\"last")); 
+      StaticJsonDocument<200> doc;
+      DeserializationError error = deserializeJson(doc, data); //反序列化JSON数据
+      if (!error) //检查反序列化是否成功
+      {
+          //读取json节点
+          //{"text":"Cloudy","code":"4","temperature":"10"}
+          const char *test = doc["text"]; 
+          const char *code = doc["code"]; 
+          const char *t = doc["temperature"]; 
+          sprintf(temperature, "%s", t);
+          Serial.print("weather is :");   
+          Serial.println(test);
+          Serial.print("code is :");   
+          Serial.println(code);
+          Serial.print("temperature is :");   
+          Serial.println(temperature);
+      }
+    }
+  }
+  else
+    Serial.print("Connect failed");
+  http.stop();
+  //串口打印出温度
+  Serial.print("end");
+}
+
+
 void setup(void) {
   u8g2.begin();
   u8g2.enableUTF8Print();
@@ -142,8 +205,10 @@ void setup(void) {
   WiFiManager wifiManager;
   wifiManager.autoConnect("AutoConnectAP");
   sprintf(buf, "%s%s","SSID:", WiFi.SSID().c_str());
+
+  httpClientRequest();  
 }
 
 void loop(void) {
-  draw(buf, CLOUD, 20);
+  draw(buf, CLOUD, temperature);
 }
